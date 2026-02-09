@@ -27,7 +27,7 @@ The `gamagama` Python namespace is a PEP 420 implicit namespace package (no `__i
 
 ### Subcommands
 
-- `convert` — process a PDF into `.md` and `.json` using docling
+- `convert` — convert a PDF into `.md` and `.json` using docling. Uses `TableFormerMode.ACCURATE` for table extraction, `ImageRefMode.PLACEHOLDER` for images. Options: `--ocr` (enable OCR, off by default), `--pages 1-50` (page range), `--force` (overwrite existing outputs). Prints OCR hint when pages have no extractable text.
 - `split-md` — split a markdown file into per-chapter files
 - `extract-tables` — extract table data from docling JSON into simpler JSON
 
