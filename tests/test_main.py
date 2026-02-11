@@ -275,6 +275,7 @@ def sample_pdf(tmp_path):
     return path
 
 
+@pytest.mark.slow
 def test_convert_real_pdf(sample_pdf, tmp_path, capsys):
     """Integration test: convert a real multi-page PDF and verify outputs."""
     output_dir = tmp_path / "output"
@@ -315,6 +316,7 @@ def test_convert_real_pdf(sample_pdf, tmp_path, capsys):
     assert "1 tables" in captured.out
 
 
+@pytest.mark.slow
 def test_convert_pages_mid_range(sample_pdf, tmp_path, capsys):
     """--pages 2-3 should convert only pages 2-3, excluding page 1 content."""
     output_dir = tmp_path / "output"
@@ -343,6 +345,7 @@ def test_convert_pages_mid_range(sample_pdf, tmp_path, capsys):
     assert "2 pages" in captured.out
 
 
+@pytest.mark.slow
 def test_convert_pages_single_middle(sample_pdf, tmp_path, capsys):
     """--pages 2 should convert only page 2."""
     output_dir = tmp_path / "output"
@@ -368,6 +371,7 @@ def test_convert_pages_single_middle(sample_pdf, tmp_path, capsys):
     assert "1 pages" in captured.out
 
 
+@pytest.mark.slow
 def test_convert_pages_out_of_range(sample_pdf, tmp_path):
     """--pages beyond the document's page count should fail."""
     output_dir = tmp_path / "output"

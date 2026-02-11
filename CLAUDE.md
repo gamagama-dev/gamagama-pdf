@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make install                # Create .venv and install in editable mode with test deps
 source .venv/bin/activate   # Activate venv (required for pytest/gg-pdf directly)
-pytest                      # Run all tests (fast, requires activated venv)
+pytest                      # Run fast tests only (skips @pytest.mark.slow by default)
+pytest -m slow              # Run only slow integration tests (~2 min docling import)
+pytest -m ''                # Run all tests (fast + slow)
 pytest tests/test_main.py   # Run a specific test file
 pytest tests/test_main.py::test_name  # Run a single test
 make test                   # Safe: ensures venv + deps before running pytest

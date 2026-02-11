@@ -19,5 +19,9 @@ test = [
     "fpdf2",
 ]
 
+[tool.pytest.ini_options]
+addopts = "-m 'not slow'"
+markers = ["slow: integration tests that load docling (~2 min import)"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
