@@ -6,12 +6,14 @@ VENV_PYTHON := $(VENV_DIR)/bin/python
 .DEFAULT_GOAL := help
 
 # Phony targets are rules that don't represent files.
-.PHONY: help install uninstall test clean
+.PHONY: help install uninstall test test-slow test-all clean
 
 help:
 	@echo "Available commands:"
 	@echo "  install     - Create a virtual environment and install the project in editable mode."
-	@echo "  test        - Run tests using pytest."
+	@echo "  test        - Run fast tests only (skips slow integration tests)."
+	@echo "  test-slow   - Run only slow integration tests (~2 min docling import)."
+	@echo "  test-all    - Run all tests (fast + slow)."
 	@echo "  uninstall   - Remove the virtual environment and cached files."
 	@echo "  clean       - Remove all build artifacts, caches, and the virtual environment."
 
@@ -26,6 +28,12 @@ install: $(VENV_PYTHON)
 # which is required for Python to find the package in the 'src' directory.
 test: install
 	$(VENV_PYTHON) -m pytest
+
+test-slow: install
+	$(VENV_PYTHON) -m pytest -m slow
+
+test-all: install
+	$(VENV_PYTHON) -m pytest -m ''
 
 # This rule removes the virtual environment and cached files.
 uninstall:
