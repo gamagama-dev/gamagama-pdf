@@ -16,6 +16,7 @@ gg-pdf = "gamagama.pdf.main:run"
 [project.optional-dependencies]
 test = [
     "pytest",
+    "fpdf2",
 ]
 
 [tool.setuptools.packages.find]

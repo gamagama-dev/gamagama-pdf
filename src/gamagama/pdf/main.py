@@ -15,15 +15,6 @@ def parse_page_range(value):
 
 
 def handle_convert(args):
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-    from docling.datamodel.base_models import InputFormat, ConversionStatus
-    from docling.datamodel.pipeline_options import (
-        PdfPipelineOptions,
-        TableStructureOptions,
-        TableFormerMode,
-    )
-    from docling_core.types.doc.base import ImageRefMode
-
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
     stem = input_path.stem
@@ -44,6 +35,16 @@ def handle_convert(args):
 
     # Create output dir if needed
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Heavy imports deferred until after cheap validation checks
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.base_models import InputFormat, ConversionStatus
+    from docling.datamodel.pipeline_options import (
+        PdfPipelineOptions,
+        TableStructureOptions,
+        TableFormerMode,
+    )
+    from docling_core.types.doc.base import ImageRefMode
 
     # Configure pipeline
     pipeline_options = PdfPipelineOptions(
@@ -85,6 +86,14 @@ def handle_convert(args):
             print(f"  {err.error_message}", file=sys.stderr)
 
     doc = result.document
+
+    # Re-check before writing (files may have appeared during long conversion)
+    if not args.force:
+        existing = [p for p in (md_path, json_path) if p.exists()]
+        if existing:
+            for p in existing:
+                print(f"Error: {p} already exists. Use --force to overwrite.", file=sys.stderr)
+            sys.exit(1)
 
     # Save outputs
     print(f"Writing {md_path}...")
