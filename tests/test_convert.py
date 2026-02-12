@@ -75,6 +75,8 @@ def test_convert_refuses_overwrite_late_check(tmp_path):
         "docling.datamodel.base_models": MagicMock(),
         "docling.datamodel.pipeline_options": MagicMock(),
         "docling_core.types.doc.base": MagicMock(),
+        "hierarchical": MagicMock(),
+        "hierarchical.postprocessor": MagicMock(),
     }
     fake_docling["docling.document_converter"].DocumentConverter.return_value.convert = fake_convert
 

@@ -84,6 +84,10 @@ def handle_convert(args):
         for err in result.errors:
             print(f"  {err.error_message}", file=sys.stderr)
 
+    # Infer heading hierarchy from PDF bookmarks, numbering, or font styles
+    from hierarchical.postprocessor import ResultPostprocessor
+    ResultPostprocessor(result, source=str(input_path)).process()
+
     doc = result.document
 
     # Re-check before writing (files may have appeared during long conversion)
