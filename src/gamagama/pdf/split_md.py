@@ -11,7 +11,7 @@ def slugify(text, max_length=80):
     """
     # Strip common chapter/section prefixes
     text = re.sub(
-        r"^(chapter|part|section|appendix)\s+[\dIVXLCDMivxlcdm]+[:\-\.\s]\s*",
+        r"^(chapter|part|section|appendix)\s+[\dA-Za-z]+[:\-\.\s]\s*",
         "",
         text,
         flags=re.IGNORECASE,
