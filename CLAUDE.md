@@ -17,7 +17,7 @@ make test                   # Safe: ensures venv + deps before running pytest
 
 ## Architecture
 
-gamagama-pdf is a pipeline CLI tool (`gg-pdf`) with three subcommands: `convert`, `split-md`, and `extract-tables`. It uses `docling` for PDF processing.
+gamagama-pdf is a pipeline CLI tool (`gg-pdf`) with four subcommands: `convert`, `split-md`, `extract-tables`, and `headers`. It uses `docling` for PDF processing.
 
 ### Namespace Package
 
@@ -32,6 +32,7 @@ The `gamagama` Python namespace is a PEP 420 implicit namespace package (no `__i
 - `convert` — convert a PDF into `.md` and `.json` using docling. Uses `TableFormerMode.ACCURATE` for table extraction, `ImageRefMode.PLACEHOLDER` for images. Options: `--ocr` (enable OCR, off by default), `--pages 1-50` (page range), `--force` (overwrite existing outputs), `--heading-strategy {auto,filtered,numbering,none}` (control heading hierarchy post-processing; default `auto`). Prints OCR hint when pages have no extractable text.
 - `split-md` — split a markdown file into per-chapter files
 - `extract-tables` — extract table data from docling JSON into simpler JSON
+- `headers` — show heading hierarchy from PDF bookmarks. Displays an indented tree with level indicators and page numbers. Annotates childless L1 entries that would be removed by `--heading-strategy filtered`. Useful for choosing the right `--heading-strategy` before running `convert`.
 
 ### Adding a New Subcommand
 

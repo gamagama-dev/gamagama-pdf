@@ -3,6 +3,7 @@ import sys
 
 from gamagama.pdf.convert import handle_convert
 from gamagama.pdf.extract_tables import handle_extract_tables
+from gamagama.pdf.headers import handle_headers
 from gamagama.pdf.split_md import handle_split_md
 
 
@@ -89,6 +90,13 @@ def build_parser():
         help="Output directory (defaults to current directory).",
     )
     extract_tables_parser.set_defaults(func=handle_extract_tables)
+
+    # headers
+    headers_parser = subparsers.add_parser(
+        "headers", help="Show heading hierarchy from PDF bookmarks."
+    )
+    headers_parser.add_argument("input", help="Path to the input PDF file.")
+    headers_parser.set_defaults(func=handle_headers)
 
     return parser
 
