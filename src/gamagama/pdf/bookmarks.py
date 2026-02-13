@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-from gamagama.pdf.convert import filter_toc
+from gamagama.pdf.convert import drop_redundant_bookmarks
 
 
 def format_toc_tree(toc):
@@ -16,11 +16,8 @@ def format_toc_tree(toc):
     if not toc:
         return None
 
-    filtered = filter_toc(toc, "filtered")
-    filtered_set = set()
-    for entry in toc:
-        if entry not in filtered:
-            filtered_set.add((entry[0], entry[1], entry[2]))
+    kept = drop_redundant_bookmarks(toc)
+    kept_set = {(e[0], e[1], e[2]) for e in kept}
 
     lines = []
     max_level = 0
@@ -38,8 +35,8 @@ def format_toc_tree(toc):
             dots_needed = 2
         dots = "." * dots_needed
         line = f"{prefix}{dots}{suffix}"
-        if (level, title, page) in filtered_set:
-            line += "  [no children — removed by 'filtered']"
+        if (level, title, page) not in kept_set:
+            line += "  [redundant — dropped by default]"
         lines.append(line)
 
     lines.append("")
@@ -47,7 +44,7 @@ def format_toc_tree(toc):
     return "\n".join(lines)
 
 
-def handle_headers(args):
+def handle_bookmarks(args):
     input_path = Path(args.input)
 
     if not input_path.is_file():

@@ -3,7 +3,7 @@ import sys
 
 from gamagama.pdf.convert import handle_convert
 from gamagama.pdf.extract_tables import handle_extract_tables
-from gamagama.pdf.headers import handle_headers
+from gamagama.pdf.bookmarks import handle_bookmarks
 from gamagama.pdf.split_md import handle_split_md
 
 
@@ -42,15 +42,24 @@ def build_parser():
     )
     convert_parser.add_argument(
         "--heading-strategy",
-        choices=["auto", "filtered", "numbering", "none"],
-        default="auto",
+        choices=["bookmarks", "numbering", "none"],
+        default="bookmarks",
         help=(
-            "Strategy for heading hierarchy post-processing (default: auto). "
-            "'auto' uses bookmarks, numbering, then font styles. "
-            "'filtered' strips childless L1 bookmarks (index entries). "
-            "'numbering' skips bookmarks entirely. "
+            "Strategy for heading hierarchy post-processing (default: bookmarks). "
+            "'bookmarks' uses PDF bookmarks with redundancy filtering and fuzzy matching. "
+            "'numbering' skips bookmarks entirely (uses numbering/font styles). "
             "'none' disables heading post-processing."
         ),
+    )
+    convert_parser.add_argument(
+        "--no-drop-empty-bookmarks",
+        action="store_true",
+        help="Keep all bookmarks including redundant index entries.",
+    )
+    convert_parser.add_argument(
+        "--no-fuzzy-match",
+        action="store_true",
+        help="Disable case-insensitive bookmark-to-content matching.",
     )
     convert_parser.set_defaults(func=handle_convert)
 
@@ -68,8 +77,8 @@ def build_parser():
     split_md_parser.add_argument(
         "--level",
         type=int,
-        default=2,
-        help="Heading level to split on (default: 2).",
+        default=None,
+        help="Heading level to split on (default: auto-detect).",
     )
     split_md_parser.add_argument(
         "--force",
@@ -91,12 +100,12 @@ def build_parser():
     )
     extract_tables_parser.set_defaults(func=handle_extract_tables)
 
-    # headers
-    headers_parser = subparsers.add_parser(
-        "headers", help="Show heading hierarchy from PDF bookmarks."
+    # bookmarks
+    bookmarks_parser = subparsers.add_parser(
+        "bookmarks", help="Show bookmark hierarchy from a PDF."
     )
-    headers_parser.add_argument("input", help="Path to the input PDF file.")
-    headers_parser.set_defaults(func=handle_headers)
+    bookmarks_parser.add_argument("input", help="Path to the input PDF file.")
+    bookmarks_parser.set_defaults(func=handle_bookmarks)
 
     return parser
 

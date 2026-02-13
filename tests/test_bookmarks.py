@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 from fpdf import FPDF
 
-from gamagama.pdf.headers import format_toc_tree, handle_headers
+from gamagama.pdf.bookmarks import format_toc_tree, handle_bookmarks
 
 
 # --- format_toc_tree tests ---
@@ -20,8 +20,6 @@ def test_format_toc_tree_single_entry():
     assert "L1" in result
     assert "Introduction" in result
     assert "p.1" in result
-    # Childless L1 should be annotated
-    assert "removed by 'filtered'" in result
     assert "1 levels, 1 entries" in result
 
 
@@ -39,7 +37,7 @@ def test_format_toc_tree_nested():
     assert "Part II" in result
     for line in result.splitlines():
         if "Part I" in line or "Part II" in line:
-            assert "removed by 'filtered'" not in line
+            assert "redundant" not in line
     # L2 entries should be indented
     for line in result.splitlines():
         if "Chapter 1" in line:
@@ -47,18 +45,22 @@ def test_format_toc_tree_nested():
     assert "2 levels, 5 entries" in result
 
 
-def test_format_toc_tree_childless_l1_annotated():
+def test_format_toc_tree_redundant_annotated():
+    """Index entries whose pages fall within a structural sibling's span are annotated."""
     toc = [
-        [1, "Introduction", 1],
-        [2, "Overview", 2],
-        [1, "Index", 100],
+        [1, "Part I", 1],
+        [2, "Chapter 1", 2],
+        [2, "Chapter 2", 10],
+        [1, "Part II", 50],
+        [2, "Chapter 3", 51],
+        [1, "Index Entry", 5],  # page 5 falls within Part I's bounded span [1, 50)
     ]
     result = format_toc_tree(toc)
     for line in result.splitlines():
-        if "Index" in line:
-            assert "removed by 'filtered'" in line
-        if "Introduction" in line:
-            assert "removed by 'filtered'" not in line
+        if "Index Entry" in line:
+            assert "redundant" in line
+        if "Part I" in line:
+            assert "redundant" not in line
 
 
 def test_format_toc_tree_three_levels():
@@ -84,15 +86,15 @@ def test_format_toc_tree_dot_leaders():
             assert ".." in line
 
 
-# --- handle_headers tests ---
+# --- handle_bookmarks tests ---
 
 
-def test_handle_headers_file_not_found(tmp_path):
+def test_handle_bookmarks_file_not_found(tmp_path):
     args = MagicMock()
     args.input = str(tmp_path / "nonexistent.pdf")
 
     with pytest.raises(SystemExit) as exc_info:
-        handle_headers(args)
+        handle_bookmarks(args)
     assert exc_info.value.code == 1
 
 
@@ -144,11 +146,11 @@ def pdf_without_bookmarks(tmp_path):
     return path
 
 
-def test_handle_headers_with_bookmarks(pdf_with_bookmarks, capsys):
+def test_handle_bookmarks_with_bookmarks(pdf_with_bookmarks, capsys):
     args = MagicMock()
     args.input = str(pdf_with_bookmarks)
 
-    handle_headers(args)
+    handle_bookmarks(args)
 
     captured = capsys.readouterr()
     assert "Introduction" in captured.out
@@ -157,35 +159,58 @@ def test_handle_headers_with_bookmarks(pdf_with_bookmarks, capsys):
     assert "2 levels, 3 entries" in captured.out
 
 
-def test_handle_headers_no_bookmarks(pdf_without_bookmarks, capsys):
+def test_handle_bookmarks_no_bookmarks(pdf_without_bookmarks, capsys):
     args = MagicMock()
     args.input = str(pdf_without_bookmarks)
 
-    handle_headers(args)
+    handle_bookmarks(args)
 
     captured = capsys.readouterr()
     assert "No bookmarks found" in captured.out
     assert "numbering" in captured.out
 
 
-def test_handle_headers_annotates_childless_l1(pdf_with_bookmarks, capsys):
-    """Introduction is a childless L1 — should be annotated."""
-    args = MagicMock()
-    args.input = str(pdf_with_bookmarks)
+def test_handle_bookmarks_annotates_redundant(tmp_path, capsys):
+    """A leaf L1 whose page falls within a non-leaf sibling's span is annotated."""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=False)
+    for _ in range(5):
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=12)
+        pdf.cell(text="content")
+    path = tmp_path / "test.pdf"
+    pdf.output(str(path))
 
-    handle_headers(args)
+    import fitz
+
+    doc = fitz.open(str(path))
+    toc = [
+        [1, "Part I", 1],
+        [2, "Chapter 1", 2],
+        [2, "Chapter 2", 3],
+        [1, "Index", 2],  # page 2 falls within Part I's span
+        [1, "Part II", 4],
+        [2, "Chapter 3", 5],
+    ]
+    doc.set_toc(toc)
+    doc.save(str(path), incremental=True, encryption=0)
+    doc.close()
+
+    args = MagicMock()
+    args.input = str(path)
+    handle_bookmarks(args)
 
     captured = capsys.readouterr()
     for line in captured.out.splitlines():
-        if "Introduction" in line:
-            assert "removed by 'filtered'" in line
-        if "Chapter 1" in line and "L1" in line:
-            assert "removed by 'filtered'" not in line
+        if "Index" in line:
+            assert "redundant" in line
+        if "Part I" in line:
+            assert "redundant" not in line
 
 
-def test_headers_help():
+def test_bookmarks_help():
     result = __import__("subprocess").run(
-        [sys.executable, "-m", "gamagama.pdf", "headers", "--help"],
+        [sys.executable, "-m", "gamagama.pdf", "bookmarks", "--help"],
         capture_output=True,
         text=True,
     )
@@ -193,10 +218,10 @@ def test_headers_help():
     assert "input" in result.stdout
 
 
-def test_help_lists_headers_subcommand():
+def test_help_lists_bookmarks_subcommand():
     result = __import__("subprocess").run(
         [sys.executable, "-m", "gamagama.pdf", "--help"],
         capture_output=True,
         text=True,
     )
-    assert "headers" in result.stdout
+    assert "bookmarks" in result.stdout

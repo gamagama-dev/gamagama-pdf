@@ -6,7 +6,13 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fpdf import FPDF
 
-from gamagama.pdf.convert import parse_page_range, filter_toc, _prepare_heading_source, handle_convert
+from gamagama.pdf.convert import (
+    parse_page_range,
+    drop_redundant_bookmarks,
+    normalize_toc_titles,
+    _prepare_heading_source,
+    handle_convert,
+)
 
 
 # --- parse_page_range tests ---
@@ -58,7 +64,9 @@ def test_convert_refuses_overwrite_late_check(tmp_path):
     args.force = False
     args.ocr = False
     args.pages = None
-    args.heading_strategy = "auto"
+    args.heading_strategy = "none"
+    args.no_drop_empty_bookmarks = False
+    args.no_fuzzy_match = False
 
     mock_status = MagicMock()
     mock_status.__eq__ = lambda self, other: other.name == "FAILURE"
@@ -206,7 +214,9 @@ def test_convert_real_pdf(sample_pdf, tmp_path, capsys):
     args.force = False
     args.ocr = False
     args.pages = None
-    args.heading_strategy = "auto"
+    args.heading_strategy = "bookmarks"
+    args.no_drop_empty_bookmarks = False
+    args.no_fuzzy_match = False
 
     handle_convert(args)
 
@@ -248,7 +258,9 @@ def test_convert_pages_mid_range(sample_pdf, tmp_path, capsys):
     args.force = False
     args.ocr = False
     args.pages = "2-3"
-    args.heading_strategy = "auto"
+    args.heading_strategy = "none"
+    args.no_drop_empty_bookmarks = False
+    args.no_fuzzy_match = False
 
     handle_convert(args)
 
@@ -278,7 +290,9 @@ def test_convert_pages_single_middle(sample_pdf, tmp_path, capsys):
     args.force = False
     args.ocr = False
     args.pages = "2"
-    args.heading_strategy = "auto"
+    args.heading_strategy = "none"
+    args.no_drop_empty_bookmarks = False
+    args.no_fuzzy_match = False
 
     handle_convert(args)
 
@@ -305,14 +319,16 @@ def test_convert_pages_out_of_range(sample_pdf, tmp_path):
     args.force = False
     args.ocr = False
     args.pages = "5-10"
-    args.heading_strategy = "auto"
+    args.heading_strategy = "none"
+    args.no_drop_empty_bookmarks = False
+    args.no_fuzzy_match = False
 
     with pytest.raises(SystemExit) as exc_info:
         handle_convert(args)
     assert exc_info.value.code == 1
 
 
-# --- filter_toc tests ---
+# --- drop_redundant_bookmarks tests ---
 
 
 SAMPLE_TOC = [
@@ -322,74 +338,134 @@ SAMPLE_TOC = [
     [2, "Chapter 2: Characters", 10],
     [1, "Part II: Advanced Rules", 50],
     [2, "Chapter 3: Combat", 51],
-    # Childless L1 index entries
-    [1, "Ball, Lightning", 120],
-    [1, "Rogue", 130],
-    [1, "Sword, Long", 140],
+    [1, "Part III: Appendices", 80],
+    [2, "Appendix A: Tables", 81],
+    # Childless L1 index entries — pages fall within bounded spans
+    [1, "Ball, Lightning", 5],
+    [1, "Rogue", 12],
+    [1, "Sword, Long", 55],
 ]
 
 
-def test_filter_toc_auto_returns_unchanged():
-    """'auto' strategy returns the TOC unchanged."""
-    result = filter_toc(SAMPLE_TOC, "auto")
-    assert result == SAMPLE_TOC
-
-
-def test_filter_toc_numbering_returns_empty():
-    """'numbering' strategy returns an empty list."""
-    result = filter_toc(SAMPLE_TOC, "numbering")
-    assert result == []
-
-
-def test_filter_toc_filtered_removes_childless_l1():
-    """'filtered' strategy removes L1 entries with no children."""
-    result = filter_toc(SAMPLE_TOC, "filtered")
-    # Structural L1 entries (followed by L2 children) should be kept
+def test_drop_redundant_keeps_structural():
+    """Structural entries with children are kept."""
+    result = drop_redundant_bookmarks(SAMPLE_TOC)
     assert [1, "Part I: Core Rules", 1] in result
     assert [1, "Part II: Advanced Rules", 50] in result
-    # All L2 entries should be kept
+    assert [1, "Part III: Appendices", 80] in result
     assert [2, "Chapter 1: Introduction", 2] in result
     assert [2, "Chapter 2: Characters", 10] in result
     assert [2, "Chapter 3: Combat", 51] in result
-    # Childless L1 index entries should be removed
-    assert [1, "Ball, Lightning", 120] not in result
-    assert [1, "Rogue", 130] not in result
-    assert [1, "Sword, Long", 140] not in result
+    assert [2, "Appendix A: Tables", 81] in result
 
 
-def test_filter_toc_filtered_empty_input():
-    """'filtered' strategy handles empty TOC."""
-    assert filter_toc([], "filtered") == []
+def test_drop_redundant_removes_index_entries():
+    """Index entries whose pages fall within structural siblings' bounded spans are removed."""
+    result = drop_redundant_bookmarks(SAMPLE_TOC)
+    titles = [e[1] for e in result]
+    assert "Ball, Lightning" not in titles  # p.5 in Part I span [1, 50)
+    assert "Rogue" not in titles            # p.12 in Part I span [1, 50)
+    assert "Sword, Long" not in titles      # p.55 in Part II span [50, 80)
 
 
-def test_filter_toc_filtered_all_childless():
-    """'filtered' removes all entries when every L1 is childless."""
-    toc = [[1, "A", 1], [1, "B", 2], [1, "C", 3]]
-    assert filter_toc(toc, "filtered") == []
+def test_drop_redundant_empty_input():
+    assert drop_redundant_bookmarks([]) == []
 
 
-def test_filter_toc_filtered_preserves_non_l1():
-    """'filtered' preserves L2+ entries even between childless L1s."""
+def test_drop_redundant_all_leaf_same_level():
+    """All-leaf entries at the same level with non-overlapping pages are kept."""
     toc = [
-        [1, "Index A", 1],
-        [2, "Sub A", 2],
-        [1, "Index B", 3],
+        [1, "A", 1],
+        [1, "B", 10],
+        [1, "C", 20],
     ]
-    result = filter_toc(toc, "filtered")
-    assert [1, "Index A", 1] in result
-    assert [2, "Sub A", 2] in result
-    assert [1, "Index B", 3] not in result
+    result = drop_redundant_bookmarks(toc)
+    assert len(result) == 3
+
+
+def test_drop_redundant_l4_leaves_preserved():
+    """L4 leaf nodes are preserved when they have no non-leaf siblings."""
+    toc = [
+        [1, "Part I", 1],
+        [2, "Chapter 1", 2],
+        [3, "Section 1.1", 3],
+        [4, "Detail A", 4],
+        [4, "Detail B", 5],
+    ]
+    result = drop_redundant_bookmarks(toc)
+    assert len(result) == 5
+
+
+def test_drop_redundant_childless_l2_preserved_when_not_positionally_redundant():
+    """A childless L2 is kept if its page doesn't fall within a sibling's span."""
+    toc = [
+        [1, "Part I", 1],
+        [2, "Chapter 1", 2],
+        [3, "Section 1.1", 3],
+        [2, "Chapter 2", 10],  # childless L2, but after Chapter 1's span
+    ]
+    result = drop_redundant_bookmarks(toc)
+    assert [2, "Chapter 2", 10] in result
+
+
+def test_drop_redundant_index_within_sibling_content():
+    """L2 leaf whose page falls within an L2 non-leaf sibling's content span is dropped."""
+    toc = [
+        [1, "Part I", 1],
+        [2, "Chapter 1", 2],
+        [3, "Section 1.1", 3],
+        [3, "Section 1.2", 8],
+        [2, "Index: Sword", 4],  # page 4 < max_desc_page(Ch1)=8
+        [2, "Chapter 2", 10],
+    ]
+    result = drop_redundant_bookmarks(toc)
+    titles = [e[1] for e in result]
+    assert "Index: Sword" not in titles
+    assert "Chapter 1" in titles
+    assert "Chapter 2" in titles
+
+
+# --- normalize_toc_titles tests ---
+
+
+def _make_mock_result(texts):
+    """Create a mock ConversionResult with the given text strings."""
+    mock = MagicMock()
+    items = []
+    for t in texts:
+        item = MagicMock()
+        item.text = t
+        items.append(item)
+    mock.document.texts = items
+    return mock
+
+
+def test_normalize_toc_titles_case_mismatch():
+    """TOC title rewritten when case differs (small-caps scenario)."""
+    toc = [[1, "Avinarcs", 1], [2, "Combat", 2]]
+    result_mock = _make_mock_result(["avinaRcs", "Combat"])
+    result = normalize_toc_titles(toc, result_mock)
+    assert result[0][1] == "avinaRcs"
+    assert result[1][1] == "Combat"
+
+
+def test_normalize_toc_titles_already_matching():
+    """TOC title unchanged when it already matches."""
+    toc = [[1, "Introduction", 1]]
+    result_mock = _make_mock_result(["Introduction"])
+    result = normalize_toc_titles(toc, result_mock)
+    assert result[0][1] == "Introduction"
+
+
+def test_normalize_toc_titles_unmatched_left_as_is():
+    """Unmatched TOC titles are left as-is."""
+    toc = [[1, "Missing Chapter", 1]]
+    result_mock = _make_mock_result(["Something Else"])
+    result = normalize_toc_titles(toc, result_mock)
+    assert result[0][1] == "Missing Chapter"
 
 
 # --- _prepare_heading_source tests ---
-
-
-def test_prepare_heading_source_auto(tmp_path):
-    """'auto' returns the input path as a string."""
-    pdf_path = tmp_path / "test.pdf"
-    pdf_path.touch()
-    result = _prepare_heading_source(pdf_path, "auto")
-    assert result == str(pdf_path)
 
 
 def test_prepare_heading_source_none(tmp_path):
@@ -398,13 +474,6 @@ def test_prepare_heading_source_none(tmp_path):
     pdf_path.touch()
     result = _prepare_heading_source(pdf_path, "none")
     assert result is None
-
-
-def test_prepare_heading_source_filtered_returns_bytesio(sample_pdf):
-    """'filtered' returns a BytesIO with a valid PDF."""
-    result = _prepare_heading_source(sample_pdf, "filtered")
-    assert isinstance(result, BytesIO)
-    assert result.read(5) == b"%PDF-"
 
 
 def test_prepare_heading_source_numbering_returns_bytesio(sample_pdf):
@@ -416,6 +485,13 @@ def test_prepare_heading_source_numbering_returns_bytesio(sample_pdf):
     doc = fitz.open(stream=result, filetype="pdf")
     assert doc.get_toc() == []
     doc.close()
+
+
+def test_prepare_heading_source_bookmarks_returns_bytesio(sample_pdf):
+    """'bookmarks' returns a BytesIO with a valid PDF."""
+    result = _prepare_heading_source(sample_pdf, "bookmarks")
+    assert isinstance(result, BytesIO)
+    assert result.read(5) == b"%PDF-"
 
 
 # --- CLI help test ---
@@ -432,7 +508,6 @@ def test_heading_strategy_in_convert_help():
                 if name == "convert":
                     help_text = subparser.format_help()
     assert "--heading-strategy" in help_text
-    assert "auto" in help_text
-    assert "filtered" in help_text
+    assert "bookmarks" in help_text
     assert "numbering" in help_text
     assert "none" in help_text

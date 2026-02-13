@@ -6,6 +6,7 @@ from gamagama.pdf.split_md import (
     slugify,
     split_markdown,
     strip_image_placeholders,
+    find_split_level,
     handle_split_md,
 )
 
@@ -244,3 +245,81 @@ def test_handle_split_md_refuses_overwrite(tmp_path):
     with pytest.raises(SystemExit) as exc_info:
         handle_split_md(args)
     assert exc_info.value.code == 1
+
+
+# --- find_split_level tests ---
+
+
+def test_find_split_level_h2():
+    text = "# Title\n\n## Ch 1\n\nbody\n\n## Ch 2\n\nbody\n"
+    assert find_split_level(text) == 2
+
+
+def test_find_split_level_h3_only():
+    text = "# Title\n\n### Sub A\n\nbody\n\n### Sub B\n\nbody\n"
+    assert find_split_level(text) == 3
+
+
+def test_find_split_level_fallback():
+    text = "No headings at all.\nJust plain text.\n"
+    assert find_split_level(text) == 2
+
+
+def test_find_split_level_h1():
+    text = "# Part 1\n\nbody\n\n# Part 2\n\nbody\n"
+    assert find_split_level(text) == 1
+
+
+# --- handle_split_md auto-level tests ---
+
+
+def test_handle_split_md_auto_level(tmp_path, capsys):
+    """When --level is None, auto-detect splits on ## headings."""
+    md_content = (
+        "# Title\n\nIntro.\n\n"
+        "## Chapter 1\n\nContent 1.\n\n"
+        "## Chapter 2\n\nContent 2.\n"
+    )
+    input_file = tmp_path / "book.md"
+    input_file.write_text(md_content)
+    output_dir = tmp_path / "output"
+
+    args = MagicMock()
+    args.input = str(input_file)
+    args.output_dir = str(output_dir)
+    args.level = None
+    args.force = False
+
+    handle_split_md(args)
+
+    assert (output_dir / "00-preamble.md").exists()
+    assert (output_dir / "01-chapter-1.md").exists()
+    assert (output_dir / "02-chapter-2.md").exists()
+
+    # Chapter files use the detected ## level
+    ch1 = (output_dir / "01-chapter-1.md").read_text()
+    assert ch1.startswith("## Chapter 1")
+
+
+def test_handle_split_md_explicit_level_overrides(tmp_path, capsys):
+    """Explicit --level overrides auto-detection."""
+    md_content = (
+        "## Parent\n\n### Sub A\n\nContent A.\n\n### Sub B\n\nContent B.\n"
+    )
+    input_file = tmp_path / "book.md"
+    input_file.write_text(md_content)
+    output_dir = tmp_path / "output"
+
+    args = MagicMock()
+    args.input = str(input_file)
+    args.output_dir = str(output_dir)
+    args.level = 3
+    args.force = False
+
+    handle_split_md(args)
+
+    # Should split on ### not ##
+    files = sorted(output_dir.glob("*.md"))
+    assert len(files) == 3  # preamble + 2 sub-sections
+    sub_a = (output_dir / "01-sub-a.md").read_text()
+    assert sub_a.startswith("### Sub A")

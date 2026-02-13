@@ -56,6 +56,15 @@ def strip_image_placeholders(text):
     return text
 
 
+def find_split_level(text):
+    """Find shallowest heading level that produces more than 1 split."""
+    for level in range(1, 7):
+        sections = split_markdown(text, level)
+        if len(sections) > 2:  # >2 because first entry is preamble
+            return level
+    return 2  # fallback
+
+
 def handle_split_md(args):
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
@@ -66,7 +75,10 @@ def handle_split_md(args):
         sys.exit(1)
 
     text = input_path.read_text()
-    sections = split_markdown(text, args.level)
+    level = args.level
+    if level is None:
+        level = find_split_level(text)
+    sections = split_markdown(text, level)
 
     # Build list of (path, content) pairs
     files_to_write = []
@@ -87,7 +99,7 @@ def handle_split_md(args):
                     file=sys.stderr,
                 )
             filename = f"{i:02d}-{slug}.md"
-            hashes = "#" * args.level
+            hashes = "#" * level
             content = f"{hashes} {heading}\n\n{body}\n"
         files_to_write.append((output_dir / filename, content))
 

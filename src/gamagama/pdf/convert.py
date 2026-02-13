@@ -14,54 +14,165 @@ def parse_page_range(value):
     return (int(parts[0]), int(parts[1]))
 
 
-def filter_toc(toc, strategy):
-    """Filter a PyMuPDF TOC list based on the heading strategy.
+def drop_redundant_bookmarks(toc):
+    """Remove redundant bookmark entries from a PyMuPDF TOC.
+
+    A leaf entry (one not followed by a deeper entry) is redundant if its page
+    falls within the page span of a non-leaf sibling under the same parent.
+    This catches index-style entries (e.g. "Sword, Long p.140") that point
+    into the middle of a structural chapter.
+
+    Two checks determine redundancy:
+    - Bounded span: page falls in [start, next_non_leaf_sibling_page)
+    - Content span: page falls in [start, max_descendant_page)
 
     Args:
         toc: List of [level, title, page] entries from doc.get_toc().
-        strategy: "filtered" removes childless L1 entries; "numbering" empties entirely.
 
     Returns:
-        Filtered TOC list.
+        Filtered TOC list with redundant entries removed.
     """
-    if strategy == "numbering":
+    if not toc:
         return []
-    if strategy == "filtered":
-        filtered = []
-        for i, entry in enumerate(toc):
-            level = entry[0]
-            if level == 1:
-                # Keep L1 only if the next entry is a child (level > 1)
-                next_entry = toc[i + 1] if i + 1 < len(toc) else None
-                if next_entry is not None and next_entry[0] > 1:
-                    filtered.append(entry)
-            else:
-                filtered.append(entry)
-        return filtered
-    return toc
+
+    n = len(toc)
+
+    # 1. Classify each entry as leaf or non-leaf
+    is_leaf = [True] * n
+    for i in range(n - 1):
+        if toc[i + 1][0] > toc[i][0]:
+            is_leaf[i] = False
+
+    # 2. Build parent mapping via a stack
+    parent = [-1] * n
+    stack = []  # stack of indices
+    for i in range(n):
+        level = toc[i][0]
+        while stack and toc[stack[-1]][0] >= level:
+            stack.pop()
+        if stack:
+            parent[i] = stack[-1]
+        stack.append(i)
+
+    # 3a. Compute bounded_end for each non-leaf entry:
+    #     page of the next non-leaf sibling (same parent) in TOC order
+    bounded_end = [None] * n
+    for i in range(n):
+        if is_leaf[i]:
+            continue
+        p = parent[i]
+        level = toc[i][0]
+        for j in range(i + 1, n):
+            if parent[j] == p and toc[j][0] == level and not is_leaf[j]:
+                bounded_end[i] = toc[j][2]
+                break
+
+    # 3b. Compute max_desc_page for each non-leaf entry:
+    #     max page among all descendants (propagated bottom-up)
+    max_desc_page = [toc[i][2] for i in range(n)]
+    for i in range(n - 1, -1, -1):
+        if parent[i] != -1:
+            p = parent[i]
+            if max_desc_page[i] > max_desc_page[p]:
+                max_desc_page[p] = max_desc_page[i]
+
+    # 4. For each leaf, check if its page falls within a non-leaf sibling's span
+    redundant = set()
+    for i in range(n):
+        if not is_leaf[i]:
+            continue
+        page = toc[i][2]
+        p = parent[i]
+        for j in range(n):
+            if j == i or is_leaf[j] or parent[j] != p:
+                continue
+            start = toc[j][2]
+            # Check bounded span [start, bounded_end)
+            end = bounded_end[j]
+            if end is not None and start <= page < end:
+                redundant.add(i)
+                break
+            # Check content span [start, max_desc_page)
+            mdp = max_desc_page[j]
+            if start <= page < mdp:
+                redundant.add(i)
+                break
+
+    return [toc[i] for i in range(n) if i not in redundant]
 
 
-def _prepare_heading_source(input_path, strategy):
+def _prepare_heading_source(input_path, strategy, drop_empty=True, fuzzy_match=True,
+                            conv_result=None):
     """Prepare the source argument for ResultPostprocessor based on strategy.
 
     Returns:
-        str path for "auto", None for "none", BytesIO for "filtered"/"numbering".
+        None for "none", BytesIO for "bookmarks"/"numbering".
     """
-    if strategy == "auto":
-        return str(input_path)
     if strategy == "none":
         return None
-    # filtered or numbering: rewrite TOC in-memory
+    if strategy == "numbering":
+        import fitz
+        doc = fitz.open(str(input_path))
+        doc.set_toc([])
+        buf = BytesIO()
+        doc.save(buf)
+        doc.close()
+        buf.seek(0)
+        return buf
+    # bookmarks strategy
     import fitz
-
     doc = fitz.open(str(input_path))
     toc = doc.get_toc()
-    doc.set_toc(filter_toc(toc, strategy))
+    if drop_empty:
+        toc = drop_redundant_bookmarks(toc)
+    if fuzzy_match and conv_result is not None:
+        toc = normalize_toc_titles(toc, conv_result)
+    doc.set_toc(toc)
     buf = BytesIO()
     doc.save(buf)
     doc.close()
     buf.seek(0)
     return buf
+
+
+def normalize_toc_titles(toc, conv_result):
+    """Rewrite TOC titles to match docling content text for fuzzy matching.
+
+    Builds a case-insensitive lookup from the docling result's text items,
+    then rewrites each TOC entry's title to the exact text found in the
+    document content. This allows the hierarchical postprocessor's
+    case-sensitive comparison to succeed.
+
+    Args:
+        toc: List of [level, title, page] entries.
+        conv_result: A docling ConversionResult with .document.texts.
+
+    Returns:
+        Modified TOC list with titles rewritten where matches are found.
+    """
+    import re
+
+    def normalize_key(text):
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    # Build lookup from document text items
+    lookup = {}
+    for text_item in conv_result.document.texts:
+        orig = text_item.text
+        key = normalize_key(orig)
+        if key and key not in lookup:
+            lookup[key] = orig
+
+    # Rewrite TOC titles
+    result = []
+    for entry in toc:
+        level, title, page = entry[0], entry[1], entry[2]
+        key = normalize_key(title)
+        if key in lookup:
+            result.append([level, lookup[key], page])
+        else:
+            result.append([level, title, page])
+    return result
 
 
 def handle_convert(args):
@@ -137,7 +248,13 @@ def handle_convert(args):
 
     # Infer heading hierarchy from PDF bookmarks, numbering, or font styles
     strategy = args.heading_strategy
-    source = _prepare_heading_source(input_path, strategy)
+    drop_empty = not getattr(args, "no_drop_empty_bookmarks", False)
+    fuzzy_match = not getattr(args, "no_fuzzy_match", False)
+    source = _prepare_heading_source(
+        input_path, strategy,
+        drop_empty=drop_empty, fuzzy_match=fuzzy_match,
+        conv_result=result,
+    )
     if source is not None:
         from hierarchical.postprocessor import ResultPostprocessor
         ResultPostprocessor(result, source=source).process()

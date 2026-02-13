@@ -17,7 +17,7 @@ make test                   # Safe: ensures venv + deps before running pytest
 
 ## Architecture
 
-gamagama-pdf is a pipeline CLI tool (`gg-pdf`) with four subcommands: `convert`, `split-md`, `extract-tables`, and `headers`. It uses `docling` for PDF processing.
+gamagama-pdf is a pipeline CLI tool (`gg-pdf`) with four subcommands: `convert`, `split-md`, `extract-tables`, and `bookmarks`. It uses `docling` for PDF processing.
 
 ### Namespace Package
 
@@ -29,10 +29,10 @@ The `gamagama` Python namespace is a PEP 420 implicit namespace package (no `__i
 
 ### Subcommands
 
-- `convert` — convert a PDF into `.md` and `.json` using docling. Uses `TableFormerMode.ACCURATE` for table extraction, `ImageRefMode.PLACEHOLDER` for images. Options: `--ocr` (enable OCR, off by default), `--pages 1-50` (page range), `--force` (overwrite existing outputs), `--heading-strategy {auto,filtered,numbering,none}` (control heading hierarchy post-processing; default `auto`). Prints OCR hint when pages have no extractable text.
-- `split-md` — split a markdown file into per-chapter files
+- `convert` — convert a PDF into `.md` and `.json` using docling. Uses `TableFormerMode.ACCURATE` for table extraction, `ImageRefMode.PLACEHOLDER` for images. Options: `--ocr` (enable OCR, off by default), `--pages 1-50` (page range), `--force` (overwrite existing outputs), `--heading-strategy {bookmarks,numbering,none}` (control heading hierarchy post-processing; default `bookmarks`), `--no-drop-empty-bookmarks` (keep redundant index entries), `--no-fuzzy-match` (disable case-insensitive bookmark-to-content matching). Prints OCR hint when pages have no extractable text.
+- `split-md` — split a markdown file into per-chapter files. Auto-detects heading level when `--level` is not specified.
 - `extract-tables` — extract table data from docling JSON into simpler JSON
-- `headers` — show heading hierarchy from PDF bookmarks. Displays an indented tree with level indicators and page numbers. Annotates childless L1 entries that would be removed by `--heading-strategy filtered`. Useful for choosing the right `--heading-strategy` before running `convert`.
+- `bookmarks` — show bookmark hierarchy from a PDF. Displays an indented tree with level indicators and page numbers. Annotates redundant entries that would be dropped by default. Useful for choosing the right `--heading-strategy` before running `convert`.
 
 ### Adding a New Subcommand
 
