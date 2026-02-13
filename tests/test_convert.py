@@ -1,11 +1,12 @@
 import json
 import sys
+from io import BytesIO
 from unittest.mock import patch, MagicMock
 
 import pytest
 from fpdf import FPDF
 
-from gamagama.pdf.convert import parse_page_range, handle_convert
+from gamagama.pdf.convert import parse_page_range, filter_toc, _prepare_heading_source, handle_convert
 
 
 # --- parse_page_range tests ---
@@ -57,6 +58,7 @@ def test_convert_refuses_overwrite_late_check(tmp_path):
     args.force = False
     args.ocr = False
     args.pages = None
+    args.heading_strategy = "auto"
 
     mock_status = MagicMock()
     mock_status.__eq__ = lambda self, other: other.name == "FAILURE"
@@ -204,6 +206,7 @@ def test_convert_real_pdf(sample_pdf, tmp_path, capsys):
     args.force = False
     args.ocr = False
     args.pages = None
+    args.heading_strategy = "auto"
 
     handle_convert(args)
 
@@ -245,6 +248,7 @@ def test_convert_pages_mid_range(sample_pdf, tmp_path, capsys):
     args.force = False
     args.ocr = False
     args.pages = "2-3"
+    args.heading_strategy = "auto"
 
     handle_convert(args)
 
@@ -274,6 +278,7 @@ def test_convert_pages_single_middle(sample_pdf, tmp_path, capsys):
     args.force = False
     args.ocr = False
     args.pages = "2"
+    args.heading_strategy = "auto"
 
     handle_convert(args)
 
@@ -300,7 +305,134 @@ def test_convert_pages_out_of_range(sample_pdf, tmp_path):
     args.force = False
     args.ocr = False
     args.pages = "5-10"
+    args.heading_strategy = "auto"
 
     with pytest.raises(SystemExit) as exc_info:
         handle_convert(args)
     assert exc_info.value.code == 1
+
+
+# --- filter_toc tests ---
+
+
+SAMPLE_TOC = [
+    # Structural bookmarks (with children)
+    [1, "Part I: Core Rules", 1],
+    [2, "Chapter 1: Introduction", 2],
+    [2, "Chapter 2: Characters", 10],
+    [1, "Part II: Advanced Rules", 50],
+    [2, "Chapter 3: Combat", 51],
+    # Childless L1 index entries
+    [1, "Ball, Lightning", 120],
+    [1, "Rogue", 130],
+    [1, "Sword, Long", 140],
+]
+
+
+def test_filter_toc_auto_returns_unchanged():
+    """'auto' strategy returns the TOC unchanged."""
+    result = filter_toc(SAMPLE_TOC, "auto")
+    assert result == SAMPLE_TOC
+
+
+def test_filter_toc_numbering_returns_empty():
+    """'numbering' strategy returns an empty list."""
+    result = filter_toc(SAMPLE_TOC, "numbering")
+    assert result == []
+
+
+def test_filter_toc_filtered_removes_childless_l1():
+    """'filtered' strategy removes L1 entries with no children."""
+    result = filter_toc(SAMPLE_TOC, "filtered")
+    # Structural L1 entries (followed by L2 children) should be kept
+    assert [1, "Part I: Core Rules", 1] in result
+    assert [1, "Part II: Advanced Rules", 50] in result
+    # All L2 entries should be kept
+    assert [2, "Chapter 1: Introduction", 2] in result
+    assert [2, "Chapter 2: Characters", 10] in result
+    assert [2, "Chapter 3: Combat", 51] in result
+    # Childless L1 index entries should be removed
+    assert [1, "Ball, Lightning", 120] not in result
+    assert [1, "Rogue", 130] not in result
+    assert [1, "Sword, Long", 140] not in result
+
+
+def test_filter_toc_filtered_empty_input():
+    """'filtered' strategy handles empty TOC."""
+    assert filter_toc([], "filtered") == []
+
+
+def test_filter_toc_filtered_all_childless():
+    """'filtered' removes all entries when every L1 is childless."""
+    toc = [[1, "A", 1], [1, "B", 2], [1, "C", 3]]
+    assert filter_toc(toc, "filtered") == []
+
+
+def test_filter_toc_filtered_preserves_non_l1():
+    """'filtered' preserves L2+ entries even between childless L1s."""
+    toc = [
+        [1, "Index A", 1],
+        [2, "Sub A", 2],
+        [1, "Index B", 3],
+    ]
+    result = filter_toc(toc, "filtered")
+    assert [1, "Index A", 1] in result
+    assert [2, "Sub A", 2] in result
+    assert [1, "Index B", 3] not in result
+
+
+# --- _prepare_heading_source tests ---
+
+
+def test_prepare_heading_source_auto(tmp_path):
+    """'auto' returns the input path as a string."""
+    pdf_path = tmp_path / "test.pdf"
+    pdf_path.touch()
+    result = _prepare_heading_source(pdf_path, "auto")
+    assert result == str(pdf_path)
+
+
+def test_prepare_heading_source_none(tmp_path):
+    """'none' returns None."""
+    pdf_path = tmp_path / "test.pdf"
+    pdf_path.touch()
+    result = _prepare_heading_source(pdf_path, "none")
+    assert result is None
+
+
+def test_prepare_heading_source_filtered_returns_bytesio(sample_pdf):
+    """'filtered' returns a BytesIO with a valid PDF."""
+    result = _prepare_heading_source(sample_pdf, "filtered")
+    assert isinstance(result, BytesIO)
+    assert result.read(5) == b"%PDF-"
+
+
+def test_prepare_heading_source_numbering_returns_bytesio(sample_pdf):
+    """'numbering' returns a BytesIO with an empty TOC."""
+    import fitz
+
+    result = _prepare_heading_source(sample_pdf, "numbering")
+    assert isinstance(result, BytesIO)
+    doc = fitz.open(stream=result, filetype="pdf")
+    assert doc.get_toc() == []
+    doc.close()
+
+
+# --- CLI help test ---
+
+
+def test_heading_strategy_in_convert_help():
+    """--heading-strategy appears in convert subcommand help."""
+    from gamagama.pdf.main import build_parser
+
+    parser = build_parser()
+    for action in parser._subparsers._actions:
+        if hasattr(action, "_parser_class"):
+            for name, subparser in action.choices.items():
+                if name == "convert":
+                    help_text = subparser.format_help()
+    assert "--heading-strategy" in help_text
+    assert "auto" in help_text
+    assert "filtered" in help_text
+    assert "numbering" in help_text
+    assert "none" in help_text

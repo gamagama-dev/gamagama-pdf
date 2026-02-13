@@ -1,4 +1,5 @@
 import sys
+from io import BytesIO
 from pathlib import Path
 
 
@@ -11,6 +12,56 @@ def parse_page_range(value):
         n = int(parts[0])
         return (n, n)
     return (int(parts[0]), int(parts[1]))
+
+
+def filter_toc(toc, strategy):
+    """Filter a PyMuPDF TOC list based on the heading strategy.
+
+    Args:
+        toc: List of [level, title, page] entries from doc.get_toc().
+        strategy: "filtered" removes childless L1 entries; "numbering" empties entirely.
+
+    Returns:
+        Filtered TOC list.
+    """
+    if strategy == "numbering":
+        return []
+    if strategy == "filtered":
+        filtered = []
+        for i, entry in enumerate(toc):
+            level = entry[0]
+            if level == 1:
+                # Keep L1 only if the next entry is a child (level > 1)
+                next_entry = toc[i + 1] if i + 1 < len(toc) else None
+                if next_entry is not None and next_entry[0] > 1:
+                    filtered.append(entry)
+            else:
+                filtered.append(entry)
+        return filtered
+    return toc
+
+
+def _prepare_heading_source(input_path, strategy):
+    """Prepare the source argument for ResultPostprocessor based on strategy.
+
+    Returns:
+        str path for "auto", None for "none", BytesIO for "filtered"/"numbering".
+    """
+    if strategy == "auto":
+        return str(input_path)
+    if strategy == "none":
+        return None
+    # filtered or numbering: rewrite TOC in-memory
+    import fitz
+
+    doc = fitz.open(str(input_path))
+    toc = doc.get_toc()
+    doc.set_toc(filter_toc(toc, strategy))
+    buf = BytesIO()
+    doc.save(buf)
+    doc.close()
+    buf.seek(0)
+    return buf
 
 
 def handle_convert(args):
@@ -85,8 +136,11 @@ def handle_convert(args):
             print(f"  {err.error_message}", file=sys.stderr)
 
     # Infer heading hierarchy from PDF bookmarks, numbering, or font styles
-    from hierarchical.postprocessor import ResultPostprocessor
-    ResultPostprocessor(result, source=str(input_path)).process()
+    strategy = args.heading_strategy
+    source = _prepare_heading_source(input_path, strategy)
+    if source is not None:
+        from hierarchical.postprocessor import ResultPostprocessor
+        ResultPostprocessor(result, source=source).process()
 
     doc = result.document
 

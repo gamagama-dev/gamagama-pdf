@@ -39,6 +39,18 @@ def build_parser():
         action="store_true",
         help="Overwrite existing output files.",
     )
+    convert_parser.add_argument(
+        "--heading-strategy",
+        choices=["auto", "filtered", "numbering", "none"],
+        default="auto",
+        help=(
+            "Strategy for heading hierarchy post-processing (default: auto). "
+            "'auto' uses bookmarks, numbering, then font styles. "
+            "'filtered' strips childless L1 bookmarks (index entries). "
+            "'numbering' skips bookmarks entirely. "
+            "'none' disables heading post-processing."
+        ),
+    )
     convert_parser.set_defaults(func=handle_convert)
 
     # split-md
