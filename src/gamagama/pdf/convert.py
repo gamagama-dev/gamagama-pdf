@@ -98,6 +98,14 @@ def drop_redundant_bookmarks(toc):
                 redundant.add(i)
                 break
 
+    # 5. Structural-leaf heuristic: at root level, if both leaf and
+    #    non-leaf entries exist, leaf entries are index-style and redundant
+    root_has_nonleaf = any(not is_leaf[i] for i in range(n) if parent[i] == -1)
+    if root_has_nonleaf:
+        for i in range(n):
+            if parent[i] == -1 and is_leaf[i]:
+                redundant.add(i)
+
     return [toc[i] for i in range(n) if i not in redundant]
 
 
@@ -106,10 +114,13 @@ def _prepare_heading_source(input_path, strategy, drop_empty=True, fuzzy_match=T
     """Prepare the source argument for ResultPostprocessor based on strategy.
 
     Returns:
-        None for "none", BytesIO for "bookmarks"/"numbering".
+        (source, title_map) tuple where source is None for "none",
+        BytesIO for "bookmarks"/"numbering", and title_map is a dict
+        mapping normalized keys to original bookmark titles (empty for
+        non-bookmarks strategies).
     """
     if strategy == "none":
-        return None
+        return (None, {})
     if strategy == "numbering":
         import fitz
         doc = fitz.open(str(input_path))
@@ -118,13 +129,14 @@ def _prepare_heading_source(input_path, strategy, drop_empty=True, fuzzy_match=T
         doc.save(buf)
         doc.close()
         buf.seek(0)
-        return buf
+        return (buf, {})
     # bookmarks strategy
     import fitz
     doc = fitz.open(str(input_path))
     toc = doc.get_toc()
     if drop_empty:
         toc = drop_redundant_bookmarks(toc)
+    title_map = _build_title_map(toc)
     if fuzzy_match and conv_result is not None:
         toc = normalize_toc_titles(toc, conv_result)
     doc.set_toc(toc)
@@ -132,7 +144,70 @@ def _prepare_heading_source(input_path, strategy, drop_empty=True, fuzzy_match=T
     doc.save(buf)
     doc.close()
     buf.seek(0)
-    return buf
+    return (buf, title_map)
+
+
+def _build_title_map(toc):
+    """Build a normalized-key → original-title map from a TOC.
+
+    Used to restore clean bookmark casing after the postprocessor has
+    matched headings using docling's (possibly garbled) content text.
+
+    Args:
+        toc: List of [level, title, page] entries (after redundancy filtering,
+             before fuzzy normalization).
+
+    Returns:
+        Dict mapping normalize_key(title) → title.
+    """
+    import re
+
+    def normalize_key(text):
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    result = {}
+    for entry in toc:
+        title = " ".join(entry[1].split())  # collapse newlines/whitespace
+        key = normalize_key(title)
+        if key and key not in result:
+            result[key] = title
+    return result
+
+
+def restore_bookmark_casing(conv_result, title_map):
+    """Replace heading text with original bookmark titles for clean casing.
+
+    After the hierarchical postprocessor sets heading levels by matching
+    TOC titles to docling content, the heading text may have garbled casing
+    from docling's extraction (e.g. small-caps "avinaRcs"). This function
+    replaces each SectionHeaderItem's text with the clean bookmark title.
+
+    Args:
+        conv_result: A docling ConversionResult with .document.texts.
+        title_map: Dict from normalize_key(title) → original bookmark title.
+    """
+    import re
+    from docling_core.types.doc.document import SectionHeaderItem
+
+    def normalize_key(text):
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    for item in conv_result.document.texts:
+        if isinstance(item, SectionHeaderItem):
+            key = normalize_key(item.text)
+            if key in title_map:
+                item.text = title_map[key]
+                item.orig = title_map[key]
+            elif key:
+                # Prefix match for truncated headings (e.g. docling extracts
+                # "Part I:" but bookmark is "Part I: Character Law").
+                # Use original text comparison to preserve word boundaries.
+                heading_lower = item.text.strip().lower()
+                candidates = [v for v in title_map.values()
+                              if v.strip().lower().startswith(heading_lower)]
+                if len(candidates) == 1:
+                    item.text = candidates[0]
+                    item.orig = candidates[0]
 
 
 def normalize_toc_titles(toc, conv_result):
@@ -250,7 +325,7 @@ def handle_convert(args):
     strategy = args.heading_strategy
     drop_empty = not getattr(args, "no_drop_empty_bookmarks", False)
     fuzzy_match = not getattr(args, "no_fuzzy_match", False)
-    source = _prepare_heading_source(
+    source, title_map = _prepare_heading_source(
         input_path, strategy,
         drop_empty=drop_empty, fuzzy_match=fuzzy_match,
         conv_result=result,
@@ -258,6 +333,8 @@ def handle_convert(args):
     if source is not None:
         from hierarchical.postprocessor import ResultPostprocessor
         ResultPostprocessor(result, source=source).process()
+    if title_map:
+        restore_bookmark_casing(result, title_map)
 
     doc = result.document
 

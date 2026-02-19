@@ -9,6 +9,8 @@ from fpdf import FPDF
 from gamagama.pdf.convert import (
     parse_page_range,
     drop_redundant_bookmarks,
+    _build_title_map,
+    restore_bookmark_casing,
     normalize_toc_titles,
     _prepare_heading_source,
     handle_convert,
@@ -408,6 +410,53 @@ def test_drop_redundant_childless_l2_preserved_when_not_positionally_redundant()
     assert [2, "Chapter 2", 10] in result
 
 
+def test_drop_redundant_structural_leaf_at_root():
+    """Root-level leaf entries are dropped when non-leaf root entries exist."""
+    toc = [
+        [1, "Part I: Core Rules", 1],
+        [2, "Chapter 1", 2],
+        [1, "Part II: Advanced", 50],
+        [2, "Chapter 2", 51],
+        # Leaf L1 entries — all pages point to page 1 (out-of-range scenario)
+        [1, "Alchemy", 1],
+        [1, "Beasts", 1],
+        [1, "Curses", 1],
+    ]
+    result = drop_redundant_bookmarks(toc)
+    titles = [e[1] for e in result]
+    assert "Part I: Core Rules" in titles
+    assert "Part II: Advanced" in titles
+    assert "Chapter 1" in titles
+    assert "Chapter 2" in titles
+    assert "Alchemy" not in titles
+    assert "Beasts" not in titles
+    assert "Curses" not in titles
+
+
+def test_drop_redundant_structural_leaf_preserves_deeper_levels():
+    """Childless L2 entries are NOT dropped by structural-leaf (root-only heuristic)."""
+    toc = [
+        [1, "Part I", 1],
+        [2, "Chapter 1", 2],
+        [3, "Section 1.1", 3],
+        [2, "Chapter 2: Quick Start", 10],  # childless L2, legitimate
+    ]
+    result = drop_redundant_bookmarks(toc)
+    titles = [e[1] for e in result]
+    assert "Chapter 2: Quick Start" in titles
+
+
+def test_drop_redundant_all_leaf_roots_preserved():
+    """When ALL root entries are leaf (no hierarchy), none are dropped."""
+    toc = [
+        [1, "Introduction", 1],
+        [1, "Getting Started", 5],
+        [1, "Appendix", 20],
+    ]
+    result = drop_redundant_bookmarks(toc)
+    assert len(result) == 3
+
+
 def test_drop_redundant_index_within_sibling_content():
     """L2 leaf whose page falls within an L2 non-leaf sibling's content span is dropped."""
     toc = [
@@ -469,29 +518,144 @@ def test_normalize_toc_titles_unmatched_left_as_is():
 
 
 def test_prepare_heading_source_none(tmp_path):
-    """'none' returns None."""
+    """'none' returns (None, {})."""
     pdf_path = tmp_path / "test.pdf"
     pdf_path.touch()
-    result = _prepare_heading_source(pdf_path, "none")
-    assert result is None
+    source, title_map = _prepare_heading_source(pdf_path, "none")
+    assert source is None
+    assert title_map == {}
 
 
 def test_prepare_heading_source_numbering_returns_bytesio(sample_pdf):
-    """'numbering' returns a BytesIO with an empty TOC."""
+    """'numbering' returns a (BytesIO, {}) with an empty TOC."""
     import fitz
 
-    result = _prepare_heading_source(sample_pdf, "numbering")
-    assert isinstance(result, BytesIO)
-    doc = fitz.open(stream=result, filetype="pdf")
+    source, title_map = _prepare_heading_source(sample_pdf, "numbering")
+    assert isinstance(source, BytesIO)
+    doc = fitz.open(stream=source, filetype="pdf")
     assert doc.get_toc() == []
     doc.close()
+    assert title_map == {}
 
 
 def test_prepare_heading_source_bookmarks_returns_bytesio(sample_pdf):
-    """'bookmarks' returns a BytesIO with a valid PDF."""
-    result = _prepare_heading_source(sample_pdf, "bookmarks")
-    assert isinstance(result, BytesIO)
-    assert result.read(5) == b"%PDF-"
+    """'bookmarks' returns a (BytesIO, title_map) with a valid PDF."""
+    source, title_map = _prepare_heading_source(sample_pdf, "bookmarks")
+    assert isinstance(source, BytesIO)
+    assert source.read(5) == b"%PDF-"
+    assert isinstance(title_map, dict)
+
+
+# --- CLI help test ---
+
+
+# --- _build_title_map tests ---
+
+
+def test_build_title_map_basic():
+    toc = [[1, "Avinarcs", 1], [2, "Combat", 2]]
+    result = _build_title_map(toc)
+    assert result["avinarcs"] == "Avinarcs"
+    assert result["combat"] == "Combat"
+
+
+def test_build_title_map_collapses_whitespace():
+    """Newlines and extra whitespace in bookmark titles are collapsed."""
+    toc = [[1, "Part I: \nCharacter Law", 1]]
+    result = _build_title_map(toc)
+    assert result["particharacterlaw"] == "Part I: Character Law"
+
+
+def test_build_title_map_first_wins():
+    """First occurrence wins when normalized keys collide."""
+    toc = [[1, "Hello World", 1], [1, "hello-world", 5]]
+    result = _build_title_map(toc)
+    assert result["helloworld"] == "Hello World"
+
+
+# --- restore_bookmark_casing tests ---
+
+
+def test_restore_bookmark_casing_replaces_text():
+    """SectionHeaderItem text is replaced with original bookmark title."""
+    from docling_core.types.doc.document import SectionHeaderItem
+
+    mock_result = MagicMock()
+    header = SectionHeaderItem.model_construct(
+        text="avinaRcs", orig="avinaRcs", self_ref="#/texts/0",
+    )
+    mock_result.document.texts = [header]
+
+    title_map = {"avinarcs": "Avinarcs"}
+    restore_bookmark_casing(mock_result, title_map)
+    assert header.text == "Avinarcs"
+    assert header.orig == "Avinarcs"
+
+
+def test_restore_bookmark_casing_prefix_match():
+    """Truncated heading text matched to full bookmark title via prefix."""
+    from docling_core.types.doc.document import SectionHeaderItem
+
+    mock_result = MagicMock()
+    header = SectionHeaderItem.model_construct(
+        text="Part I: ", orig="Part I: ", self_ref="#/texts/0",
+    )
+    mock_result.document.texts = [header]
+
+    title_map = {
+        "particharacterlaw": "Part I: Character Law",
+        "partiiadvancedrules": "Part II: Advanced Rules",
+    }
+    restore_bookmark_casing(mock_result, title_map)
+    assert header.text == "Part I: Character Law"
+    assert header.orig == "Part I: Character Law"
+
+
+def test_restore_bookmark_casing_prefix_ambiguous_skipped():
+    """Prefix match skipped when multiple candidates match."""
+    from docling_core.types.doc.document import SectionHeaderItem
+
+    mock_result = MagicMock()
+    header = SectionHeaderItem.model_construct(
+        text="Part", orig="Part", self_ref="#/texts/0",
+    )
+    mock_result.document.texts = [header]
+
+    title_map = {
+        "particharacterlaw": "Part I: Character Law",
+        "partiiadvancedrules": "Part II: Advanced Rules",
+    }
+    restore_bookmark_casing(mock_result, title_map)
+    # "Part" is a prefix of both — ambiguous, so text unchanged
+    assert header.text == "Part"
+
+
+def test_restore_bookmark_casing_skips_non_headers():
+    """Non-SectionHeaderItem text items are left unchanged."""
+    mock_result = MagicMock()
+    item = MagicMock()
+    item.text = "avinaRcs"
+    # Make isinstance check fail by not being a SectionHeaderItem
+    item.__class__ = type("TextItem", (), {})
+    mock_result.document.texts = [item]
+
+    title_map = {"avinarcs": "Avinarcs"}
+    restore_bookmark_casing(mock_result, title_map)
+    assert item.text == "avinaRcs"
+
+
+def test_restore_bookmark_casing_empty_map():
+    """No changes when title_map is empty."""
+    from docling_core.types.doc.document import SectionHeaderItem
+
+    mock_result = MagicMock()
+    header = SectionHeaderItem.model_construct(
+        text="avinaRcs", orig="avinaRcs", self_ref="#/texts/0",
+    )
+    mock_result.document.texts = [header]
+
+    restore_bookmark_casing(mock_result, {})
+    assert header.text == "avinaRcs"
 
 
 # --- CLI help test ---
