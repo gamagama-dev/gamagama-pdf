@@ -98,6 +98,11 @@ def build_parser():
         default=".",
         help="Output directory (defaults to current directory).",
     )
+    extract_tables_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing output directory for this source book.",
+    )
     extract_tables_parser.set_defaults(func=handle_extract_tables)
 
     # bookmarks
