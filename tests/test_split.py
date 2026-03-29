@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gamagama.pdf.split_md import (
+from gamagama.pdf.split import (
     slugify,
     split_markdown,
     strip_image_placeholders,

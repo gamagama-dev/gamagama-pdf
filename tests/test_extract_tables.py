@@ -6,13 +6,17 @@ from unittest.mock import patch
 
 import pytest
 
-from gamagama.pdf.extract_tables import (
-    _assign_filenames,
-    _deduplicate_within_book,
+from gamagama.pdf.extract_tables.extraction import (
     _normalize_title,
-    _resolve_conflicts,
     _source_from_stem,
+)
+from gamagama.pdf.extract_tables.dedup import (
     _tables_content_equal,
+    _deduplicate_within_book,
+    _resolve_conflicts,
+)
+from gamagama.pdf.extract_tables.index import (
+    _assign_filenames,
     _update_cross_index,
 )
 

@@ -4,7 +4,7 @@ import sys
 from gamagama.pdf.convert import handle_convert
 from gamagama.pdf.extract_tables import handle_extract_tables
 from gamagama.pdf.bookmarks import handle_bookmarks
-from gamagama.pdf.split_md import handle_split_md
+from gamagama.pdf.split import handle_split_md
 
 
 def build_parser():

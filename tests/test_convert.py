@@ -6,14 +6,14 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fpdf import FPDF
 
-from gamagama.pdf.convert import (
-    parse_page_range,
+from gamagama.pdf.convert import handle_convert
+from gamagama.pdf.convert.pipeline import parse_page_range
+from gamagama.pdf.convert.headings import (
     drop_redundant_bookmarks,
     _build_title_map,
     restore_bookmark_casing,
     normalize_toc_titles,
     _prepare_heading_source,
-    handle_convert,
 )
 
 

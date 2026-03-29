@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-from gamagama.pdf.convert import drop_redundant_bookmarks
+from gamagama.pdf.convert.headings import drop_redundant_bookmarks
 
 
 def format_toc_tree(toc):
