@@ -853,8 +853,8 @@ def test_save_with_repair_unrelated_validation_error_reraises():
         _save_with_repair(lambda: (_ for _ in ()).throw(exc), MagicMock(), "test")
 
 
-def test_save_with_repair_unrepairable_exits_nonzero():
-    """Exits with code 1 when ValidationError cannot be repaired (no matching pattern)."""
+def test_save_with_repair_unrepairable_warns_and_returns(capsys):
+    """Warns on stderr and returns (does not abort) when a hierarchy error cannot be repaired."""
     from gamagama.pdf.convert.pipeline import _save_with_repair
     from docling_core.types.doc.document import DoclingDocument
 
@@ -862,9 +862,56 @@ def test_save_with_repair_unrepairable_exits_nonzero():
         "Document hierarchy is inconsistent. #/tables/0 has cell #/groups/0 with parent #/texts/0"
     )
 
-    # Doc has no groups, so repair finds nothing and gives up
+    # Doc has no groups, so repair finds nothing and falls through to table-clearing.
+    # Doc also has no tables, so clearing is a no-op, and the save still fails.
+    # Expected: function warns on stderr and returns without raising.
     doc = DoclingDocument(name="test")
 
-    with pytest.raises(SystemExit) as exc_info:
-        _save_with_repair(lambda: (_ for _ in ()).throw(exc), doc, "test")
-    assert exc_info.value.code == 1
+    # Must not raise
+    _save_with_repair(lambda: (_ for _ in ()).throw(exc), doc, "test")
+
+    captured = capsys.readouterr()
+    assert "Warning" in captured.err
+    assert "not written" in captured.err
+
+
+def test_save_with_repair_clears_table_on_stuck_repair(capsys):
+    """Falls back to clearing the offending table when parent-ref repair makes no progress."""
+    from gamagama.pdf.convert.pipeline import _save_with_repair
+    from docling_core.types.doc.document import DoclingDocument, TableItem
+    from docling_core.types.doc.document import TableData
+    from docling_core.types.doc import RefItem
+
+    # Build a doc with a table whose cell list is non-empty but whose groups list is
+    # empty (so _repair_hierarchy_error finds nothing to fix).
+    doc = DoclingDocument(name="test")
+    td = TableData(num_rows=1, num_cols=1)
+    table = TableItem(
+        self_ref="#/tables/0",
+        data=td,
+        parent=RefItem(cref="#"),
+    )
+    doc.tables.append(table)
+
+    exc = _make_hierarchy_validation_error(
+        "Document hierarchy is inconsistent. #/tables/0 has cell #/groups/0 with parent #/texts/0"
+    )
+
+    call_count = [0]
+
+    def save_fn():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # First call: triggers the repair loop (no groups -> stuck -> clear tables)
+            raise exc
+        # Second call (after clearing): succeeds
+
+    _save_with_repair(save_fn, doc, "saving test.md")
+
+    assert call_count[0] == 2
+    assert doc.tables[0].data.table_cells == []
+    assert doc.tables[0].data.num_rows == 0
+    assert doc.tables[0].data.num_cols == 0
+    captured = capsys.readouterr()
+    assert "Warning" in captured.err
+    assert "#/tables/0" in captured.err

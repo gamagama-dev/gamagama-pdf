@@ -47,41 +47,75 @@ def _repair_hierarchy_error(doc, error_str):
     return repairs
 
 
+def _clear_inconsistent_tables(doc, error_str, description):
+    """
+    Parse a hierarchy inconsistency error, clear the cell data of offending tables,
+    and warn.  This is a last-resort fallback — affected tables will be empty in output.
+    """
+    pattern = r"#/tables/(\d+) has cell"
+    indices = sorted({int(m.group(1)) for m in re.finditer(pattern, error_str)})
+    for idx in indices:
+        if idx >= len(doc.tables):
+            continue
+        table = doc.tables[idx]
+        if hasattr(table, "data") and table.data is not None:
+            table.data.table_cells = []
+            table.data.num_rows = 0
+            table.data.num_cols = 0
+        print(
+            f"Warning: {description} — table #/tables/{idx} has an inconsistent "
+            "hierarchy that could not be repaired; its data has been cleared.",
+            file=sys.stderr,
+        )
+
+
 def _save_with_repair(save_fn, doc, description):
     """
     Call save_fn(); on a Pydantic ValidationError about inconsistent hierarchy,
-    attempt to repair doc in-place and retry.  Warns on stderr for each repair.
-    Exits with code 1 if the error cannot be resolved.
+    attempt to repair doc in-place and retry.  Continues as long as each attempt
+    makes at least one new repair (progress check).  If no progress can be made,
+    clears the offending tables as a last resort and retries.  Warns on stderr;
+    never aborts the process — partial output is preferable to no output.
     """
     from pydantic import ValidationError
 
-    MAX_ATTEMPTS = 50  # guard against unfixable loops
     all_repairs = []
+    saved = False
+    last_error_str = None
 
-    for attempt in range(MAX_ATTEMPTS):
+    # Retry as long as each pass makes at least one repair (i.e. is making progress).
+    # If an attempt yields no new repairs we are stuck and fall through to the
+    # table-clearing fallback.
+    while True:
         try:
             save_fn()
+            saved = True
             break
         except ValidationError as exc:
             error_str = str(exc)
+            last_error_str = error_str
             if "hierarchy is inconsistent" not in error_str:
                 raise
             repairs = _repair_hierarchy_error(doc, error_str)
             if not repairs:
-                print(
-                    f"Error: {description} failed — document hierarchy is inconsistent "
-                    "and could not be repaired automatically.",
-                    file=sys.stderr,
-                )
-                print(error_str, file=sys.stderr)
-                sys.exit(1)
+                # No parent-ref fixes are possible; stop retrying.
+                break
             all_repairs.extend(repairs)
-    else:
-        print(
-            f"Error: {description} failed — too many hierarchy repairs needed, giving up.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+
+    if not saved and last_error_str:
+        # Last resort: clear the data of each offending table so the serializer
+        # has nothing invalid to validate.  The table will appear empty in output.
+        _clear_inconsistent_tables(doc, last_error_str, description)
+        try:
+            save_fn()
+            saved = True
+        except ValidationError as exc:
+            print(
+                f"Warning: {description} — document hierarchy could not be repaired "
+                "even after clearing offending tables; this file was not written.",
+                file=sys.stderr,
+            )
+            return  # Degrade gracefully — do not abort the whole run.
 
     if all_repairs:
         print(
@@ -215,18 +249,20 @@ def handle_convert(args):
             sys.exit(1)
 
     # Save outputs
-    print(f"Writing {md_path}...")
     _save_with_repair(
         lambda: doc.save_as_markdown(md_path, image_mode=ImageRefMode.PLACEHOLDER),
         doc,
         f"saving {md_path.name}",
     )
-    print(f"Writing {json_path}...")
+    if md_path.exists():
+        print(f"Written {md_path}")
     _save_with_repair(
         lambda: doc.save_as_json(json_path, image_mode=ImageRefMode.PLACEHOLDER),
         doc,
         f"saving {json_path.name}",
     )
+    if json_path.exists():
+        print(f"Written {json_path}")
 
     # Summary
     num_pages = doc.num_pages()
