@@ -310,6 +310,41 @@ def test_convert_pages_single_middle(sample_pdf, tmp_path, capsys):
 
 
 @pytest.mark.slow
+def test_convert_pages_mid_range_with_numbering_strategy(sample_pdf, tmp_path, capsys):
+    """--pages 2-3 with --heading-strategy numbering must not crash with IndexError.
+
+    Previously, the hierarchical library indexed result.pages[page_no - 1] using
+    absolute page numbers, so any range not starting at 1 caused an IndexError.
+    The numbering strategy sets an empty TOC, which forces the library to call
+    _get_headers_result() — the exact code path that contained the bug.
+    """
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    args = MagicMock()
+    args.input = str(sample_pdf)
+    args.output_dir = str(output_dir)
+    args.force = False
+    args.ocr = False
+    args.pages = "2-3"
+    args.heading_strategy = "numbering"
+    args.no_drop_empty_bookmarks = False
+    args.no_fuzzy_match = False
+
+    handle_convert(args)
+
+    stem = sample_pdf.stem
+    md_content = (output_dir / f"{stem}.md").read_text()
+
+    assert "Sample Rulebook" not in md_content, "Page 1 title should not appear"
+    assert "Chapter 1" in md_content, "Page 2 heading not found"
+    assert "Chapter 2" in md_content, "Page 3 heading not found"
+
+    captured = capsys.readouterr()
+    assert "2 pages" in captured.out
+
+
+@pytest.mark.slow
 def test_convert_pages_out_of_range(sample_pdf, tmp_path):
     """--pages beyond the document's page count should fail."""
     output_dir = tmp_path / "output"

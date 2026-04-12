@@ -99,6 +99,20 @@ def handle_convert(args):
         conv_result=result,
     )
     if source is not None:
+        # The hierarchical library indexes result.pages as result.pages[page_no - 1],
+        # assuming the PDF starts at page 1. When --pages specifies a range that
+        # starts after page 1 (e.g. 26-50), result.pages only has the loaded pages
+        # (indices 0-24), but prov.page_no values are absolute (26-50), causing an
+        # IndexError. Prepend dummy Page objects so the absolute page_no maps to
+        # the correct list index.
+        page_start = page_range[0]
+        if page_start > 1:
+            from docling.datamodel.base_models import Page, PagePredictions
+            dummy_pages = [
+                Page(page_no=i, predictions=PagePredictions())
+                for i in range(1, page_start)
+            ]
+            result.pages = dummy_pages + result.pages
         from hierarchical.postprocessor import ResultPostprocessor
         ResultPostprocessor(result, source=source).process()
     if title_map:
