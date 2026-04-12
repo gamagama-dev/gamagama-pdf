@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -5,6 +6,91 @@ from .headings import (
     _prepare_heading_source,
     restore_bookmark_casing,
 )
+
+
+def _repair_hierarchy_error(doc, error_str):
+    """
+    Parse a docling ValidationError about inconsistent table hierarchy and repair in-place.
+
+    Docling emits messages like:
+        "Document hierarchy is inconsistent. #/tables/20 has cell #/groups/0 with parent #/texts/3"
+
+    For each such entry the referenced cell item has its parent ref corrected to point at
+    the containing table.  Returns a list of human-readable repair descriptions (one per fix).
+    """
+    from docling_core.types.doc import RefItem
+
+    pattern = r"(#/tables/\d+) has cell (#/\S+) with parent (#/\S+)"
+    repairs = []
+    for match in re.finditer(pattern, error_str):
+        table_ref = match.group(1)   # e.g. "#/tables/20"
+        cell_ref  = match.group(2)   # e.g. "#/groups/0"
+        wrong_ref = match.group(3)   # e.g. "#/texts/3"
+
+        parts = cell_ref.lstrip("#/").split("/")
+        if len(parts) != 2:
+            continue
+        collection_name, idx_str = parts
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            continue
+
+        collection = getattr(doc, collection_name, None)
+        if collection is None or idx >= len(collection):
+            continue
+
+        item = collection[idx]
+        item.parent = RefItem(cref=table_ref)
+        repairs.append(f"{cell_ref}: parent {wrong_ref} -> {table_ref}")
+
+    return repairs
+
+
+def _save_with_repair(save_fn, doc, description):
+    """
+    Call save_fn(); on a Pydantic ValidationError about inconsistent hierarchy,
+    attempt to repair doc in-place and retry.  Warns on stderr for each repair.
+    Exits with code 1 if the error cannot be resolved.
+    """
+    from pydantic import ValidationError
+
+    MAX_ATTEMPTS = 50  # guard against unfixable loops
+    all_repairs = []
+
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            save_fn()
+            break
+        except ValidationError as exc:
+            error_str = str(exc)
+            if "hierarchy is inconsistent" not in error_str:
+                raise
+            repairs = _repair_hierarchy_error(doc, error_str)
+            if not repairs:
+                print(
+                    f"Error: {description} failed — document hierarchy is inconsistent "
+                    "and could not be repaired automatically.",
+                    file=sys.stderr,
+                )
+                print(error_str, file=sys.stderr)
+                sys.exit(1)
+            all_repairs.extend(repairs)
+    else:
+        print(
+            f"Error: {description} failed — too many hierarchy repairs needed, giving up.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if all_repairs:
+        print(
+            f"Warning: {len(all_repairs)} inconsistent table hierarchy reference(s) were "
+            "repaired; affected table content may be imprecise.",
+            file=sys.stderr,
+        )
+        for r in all_repairs:
+            print(f"  {r}", file=sys.stderr)
 
 
 def parse_page_range(value):
@@ -130,9 +216,17 @@ def handle_convert(args):
 
     # Save outputs
     print(f"Writing {md_path}...")
-    doc.save_as_markdown(md_path, image_mode=ImageRefMode.PLACEHOLDER)
+    _save_with_repair(
+        lambda: doc.save_as_markdown(md_path, image_mode=ImageRefMode.PLACEHOLDER),
+        doc,
+        f"saving {md_path.name}",
+    )
     print(f"Writing {json_path}...")
-    doc.save_as_json(json_path, image_mode=ImageRefMode.PLACEHOLDER)
+    _save_with_repair(
+        lambda: doc.save_as_json(json_path, image_mode=ImageRefMode.PLACEHOLDER),
+        doc,
+        f"saving {json_path.name}",
+    )
 
     # Summary
     num_pages = doc.num_pages()

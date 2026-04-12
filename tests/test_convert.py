@@ -710,3 +710,161 @@ def test_heading_strategy_in_convert_help():
     assert "bookmarks" in help_text
     assert "numbering" in help_text
     assert "none" in help_text
+
+
+# --- _repair_hierarchy_error tests ---
+
+
+def _make_doc_with_bad_group_parent():
+    """Return a DoclingDocument with a GroupItem whose parent points to a text item."""
+    from docling_core.types.doc.document import DoclingDocument, GroupItem
+    from docling_core.types.doc import RefItem
+
+    doc = DoclingDocument(name="test")
+    group = GroupItem(self_ref="#/groups/0", parent=RefItem(cref="#/texts/0"))
+    doc.groups.append(group)
+    return doc
+
+
+def test_repair_hierarchy_error_fixes_parent():
+    """Repairs a group whose parent points to a text item."""
+    from gamagama.pdf.convert.pipeline import _repair_hierarchy_error
+
+    doc = _make_doc_with_bad_group_parent()
+    error_str = (
+        "Document hierarchy is inconsistent. "
+        "#/tables/5 has cell #/groups/0 with parent #/texts/0"
+    )
+    repairs = _repair_hierarchy_error(doc, error_str)
+
+    assert len(repairs) == 1
+    assert "#/groups/0" in repairs[0]
+    assert "#/tables/5" in repairs[0]
+    assert doc.groups[0].parent.cref == "#/tables/5"
+
+
+def test_repair_hierarchy_error_no_match_returns_empty():
+    """Returns empty list when error string has no hierarchy pattern."""
+    from gamagama.pdf.convert.pipeline import _repair_hierarchy_error
+
+    doc = _make_doc_with_bad_group_parent()
+    repairs = _repair_hierarchy_error(doc, "some unrelated error")
+    assert repairs == []
+
+
+def test_repair_hierarchy_error_missing_collection_skipped():
+    """Skips entries whose collection doesn't exist on the doc."""
+    from gamagama.pdf.convert.pipeline import _repair_hierarchy_error
+    from docling_core.types.doc.document import DoclingDocument
+
+    doc = DoclingDocument(name="test")  # no groups added
+    error_str = (
+        "Document hierarchy is inconsistent. "
+        "#/tables/0 has cell #/groups/0 with parent #/texts/0"
+    )
+    repairs = _repair_hierarchy_error(doc, error_str)
+    assert repairs == []
+
+
+def test_repair_hierarchy_error_out_of_range_skipped():
+    """Skips entries whose index is out of range."""
+    from gamagama.pdf.convert.pipeline import _repair_hierarchy_error
+    from docling_core.types.doc.document import DoclingDocument, GroupItem
+    from docling_core.types.doc import RefItem
+
+    doc = DoclingDocument(name="test")
+    doc.groups.append(GroupItem(self_ref="#/groups/0", parent=RefItem(cref="#/texts/0")))
+
+    # Error references #/groups/99 which doesn't exist
+    error_str = (
+        "Document hierarchy is inconsistent. "
+        "#/tables/0 has cell #/groups/99 with parent #/texts/0"
+    )
+    repairs = _repair_hierarchy_error(doc, error_str)
+    assert repairs == []
+
+
+# --- _save_with_repair tests ---
+
+
+def _make_hierarchy_validation_error(error_body):
+    """Construct a real pydantic ValidationError whose string contains error_body."""
+    from pydantic import BaseModel, field_validator, ValidationError
+
+    class _FailModel(BaseModel):
+        x: int
+
+        @field_validator("x")
+        @classmethod
+        def _fail(cls, v):
+            raise ValueError(error_body)
+
+    try:
+        _FailModel(x=1)
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("expected ValidationError")  # pragma: no cover
+
+
+def test_save_with_repair_clean_doc_calls_save_once():
+    """save_fn is called exactly once when no error is raised."""
+    from gamagama.pdf.convert.pipeline import _save_with_repair
+
+    calls = []
+    _save_with_repair(lambda: calls.append(1), MagicMock(), "test save")
+    assert calls == [1]
+
+
+def test_save_with_repair_repairs_and_retries(capsys):
+    """Repairs hierarchy and retries when ValidationError contains the sentinel message."""
+    from gamagama.pdf.convert.pipeline import _save_with_repair
+
+    doc = _make_doc_with_bad_group_parent()
+    hierarchy_exc = _make_hierarchy_validation_error(
+        "Document hierarchy is inconsistent. "
+        "#/tables/0 has cell #/groups/0 with parent #/texts/0"
+    )
+
+    call_count = [0]
+
+    def save_fn():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise hierarchy_exc
+        # Second call succeeds
+
+    _save_with_repair(save_fn, doc, "saving test.md")
+
+    assert call_count[0] == 2
+    assert doc.groups[0].parent.cref == "#/tables/0"
+    captured = capsys.readouterr()
+    assert "Warning" in captured.err
+    assert "repaired" in captured.err
+
+
+def test_save_with_repair_unrelated_validation_error_reraises():
+    """ValidationError not about hierarchy is re-raised unchanged."""
+    from pydantic import ValidationError
+    from gamagama.pdf.convert.pipeline import _save_with_repair
+
+    exc = _make_hierarchy_validation_error("some unrelated pydantic error")
+
+    with pytest.raises(ValidationError):
+        _save_with_repair(lambda: (_ for _ in ()).throw(exc), MagicMock(), "test")
+
+
+def test_save_with_repair_unrepairable_exits_nonzero():
+    """Exits with code 1 when ValidationError cannot be repaired (no matching pattern)."""
+    from gamagama.pdf.convert.pipeline import _save_with_repair
+    from docling_core.types.doc.document import DoclingDocument
+
+    exc = _make_hierarchy_validation_error(
+        "Document hierarchy is inconsistent. #/tables/0 has cell #/groups/0 with parent #/texts/0"
+    )
+
+    # Doc has no groups, so repair finds nothing and gives up
+    doc = DoclingDocument(name="test")
+
+    with pytest.raises(SystemExit) as exc_info:
+        _save_with_repair(lambda: (_ for _ in ()).throw(exc), doc, "test")
+    assert exc_info.value.code == 1
